@@ -54,10 +54,8 @@ main()
 
     // SCT frequency output setup
     SCT::configure_fout();
-    CTOUT_0.claim_pin(TACH);
-    CTOUT_1.claim_pin(SPEEDO);
-    SCT::set_fout_period(0, 1000);
-    SCT::set_fout_period(1, 2000);
+    output_rpm(0);
+    output_mph(0);
 
     // UART setup
     UART0_RXD.claim_pin(RXD);
@@ -66,6 +64,25 @@ main()
 
     // SES LED is active-low
     SES.configure(Pin::Output, Pin::PushPull);
+    SES << true;
+
+    // Startup sweep
+    for (int step = 0; step <= 10; step++) {
+        output_mph(step * 15);
+        output_rpm(step * 700);
+        Timer0.delay(150000 * 24);
+        SES.toggle();
+    }
+
+    for (int step = 10; step >= 0; step--) {
+        output_mph(step * 15);
+        output_rpm(step * 700);
+        Timer0.delay(150000 * 24);
+        SES.toggle();
+    }
+
+    output_mph(0);
+    output_rpm(0);
     SES << true;
 
     // spin forever
@@ -104,8 +121,15 @@ static void
 output_rpm(unsigned rpm)
 {
     auto tach_us = 15000000UL / rpm;
-    SCT::set_fout_period(0, tach_us);
-    //SCT::set_fout_period(0, rpm);
+
+    if (rpm == 0) {
+        TACH << 0;
+        TACH.configure(Pin::Output, Pin::PushPull);
+        CTOUT_0.release_pin();
+    } else {
+        CTOUT_0.claim_pin(TACH);
+        SCT::set_fout_period(0, tach_us);
+    }
 }
 
 //
@@ -115,20 +139,29 @@ output_rpm(unsigned rpm)
 // OE 930 rear wheel = 840 revs per mile
 // 100 mph = 23.3 revs per second @ 8 pulses per rev = 186Hz.
 //
-// interval = 1 / (speed * 840 * 8 / 3600)
-// interval * (speed * 840 * 8 / 3600) = 1
-// speed * 840 * 8 / 3600 = 1 / interval
-// speed * 6720 = 3600 / interval
-// speed = 3600 / (interval * 6720)
+// Coeffients below derived from experimental measurement.
+// Linearity of the VDO speedometer is not very good; it reads
+// a little fast at low speeds, and slow at higher speeds.
+// The values here are good for the 30-90mph range where
+// knowing your speed is important.
 //
-// assuming 16-bit timer counting in microseconds, minimum interval is
-// 2µs (267000mph), maximum is 128ms (4mph).
-//
-
 static void
 output_mph(unsigned mph)
 {
-    auto speedo_us = 535714UL / mph;
-    SCT::set_fout_period(1, speedo_us);
-    //SCT::set_fout_period(1, mph);
+    static const int slope = 1750;
+    static const int intercept = -3250;
+
+    int mpps = slope * mph + intercept;
+    int speedo_us = 1000000000L / mpps;
+
+    // For speed values that can't be displayed (or if we
+    // are not moving), turn off the output.
+    if ((mph == 0) || (mpps < 0)) {
+        SPEEDO << 1;
+        SPEEDO.configure(Pin::Output, Pin::PushPull);
+        CTOUT_1.release_pin();
+    } else {
+        CTOUT_1.claim_pin(SPEEDO);
+        SCT::set_fout_period(1, speedo_us);
+    }
 }
