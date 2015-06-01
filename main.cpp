@@ -33,19 +33,16 @@
 #include "ebl.h"
 
 #define RXD     P0_0
-#define TXD     P0_4
 #define TACH    P0_2
 #define SPEEDO  P0_3
-#define SES     P0_5
-
-#define DEBUG(str)  do { UART0 << str << "\r\n"; } while(0)
+#define SES     P0_4
+#define RXEN    P0_5
 
 EBLDecoder EBL;
 
 extern "C" int main();
 static void output_rpm(unsigned rpm);
 static void output_mph(unsigned mph);
-
 
 int
 main()
@@ -57,14 +54,15 @@ main()
     output_rpm(0);
     output_mph(0);
 
-    // UART setup
+    // UART setup - note no TXD
     UART0_RXD.claim_pin(RXD);
-    UART0_TXD.claim_pin(TXD);
     UART0.configure(57600);
 
-    // SES LED is active-low
-    SES.configure(Pin::Output, Pin::PushPull);
-    SES << true;
+    // Turn on the RS-485 receiver
+    RXEN.configure(Pin::Output, Pin::PushPull).set(0);
+
+    // Configure the SES LED
+    SES.configure(Pin::Output, Pin::PushPull).set(0);
 
     // Startup sweep
     for (int step = 0; step <= 10; step++) {
@@ -81,9 +79,10 @@ main()
         SES.toggle();
     }
 
+    // Reset to sane state
     output_mph(0);
     output_rpm(0);
-    SES << true;
+    SES.set(0);
 
     // spin forever
     for (;;) {
@@ -96,8 +95,7 @@ main()
             if (EBL.was_updated()) {
                 output_rpm(EBL.engine_speed());
                 output_mph(EBL.road_speed());
-                SES << !EBL.ses_set();
-                //SES.toggle();
+                SES << EBL.ses_set();
             }
         }
     }
@@ -151,17 +149,17 @@ output_mph(unsigned mph)
     static const int slope = 1750;
     static const int intercept = -3250;
 
-    int mpps = slope * mph + intercept;
-    int speedo_us = 1000000000L / mpps;
+    auto mpps = slope * (int)mph + intercept;
 
     // For speed values that can't be displayed (or if we
     // are not moving), turn off the output.
-    if ((mph == 0) || (mpps < 0)) {
-        SPEEDO << 1;
+    if ((mph == 0) || (mpps <= 0)) {
+        SPEEDO << 0;
         SPEEDO.configure(Pin::Output, Pin::PushPull);
         CTOUT_1.release_pin();
     } else {
         CTOUT_1.claim_pin(SPEEDO);
+        auto speedo_us = 1000000000UL / mpps;
         SCT::set_fout_period(1, speedo_us);
     }
 }
